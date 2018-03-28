@@ -1,3 +1,4 @@
+//CREATED BY DEREK PICKELL, SARAH JONES & EMILY ROSE
 //LIBRARIES
 #include <SPI.h>
 #include <SD.h>
@@ -22,9 +23,21 @@ uint32_t syncTime = 0; // time of last sync()
 #define DHTTYPE           DHT22     // DHT 22 (AM2302)
 DHT_Unified dht(DHTPIN, DHTTYPE);
 
+//ANEMOMETER 
+int sensorValue = 0; //Variable stores the value direct from the analog pin
+float sensorVoltage = 0; //Variable that stores the voltage (in Volts) from the anemometer being sent to the analog pin
+float windSpeed = 0; // Wind speed in meters per second (m/s)
+float voltageConversionConstant = .004882814; //This constant maps the value provided from the analog read function, which ranges from 0 to 1023, to actual voltage, which ranges from 0V to 5V
+ 
+float voltageMin = .4; // Mininum output voltage from anemometer in mV.
+float windSpeedMin = 0; // Wind speed in meters/sec corresponding to minimum voltage
+float voltageMax = 2.0; // Maximum output voltage from anemometer in mV.
+float windSpeedMax = 32; // Wind speed in meters/sec corresponding to maximum voltage
+
+//REAL TIME CLOCK
 RTC_DS1307 RTC; // define the Real Time Clock object
 
-// for the data logging shield, we use digital pin 10 for the SD cs line
+//DATA LOGGING SHIELD use digital pin 10 for the SD cs line
 const int chipSelect = 10;
 // the logging file
 File logfile;
@@ -89,20 +102,21 @@ void setup(void){
 #endif  
   }
  //following line sets the RTC to the date & time this sketch was compiled
-     RTC.begin();
-     RTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
-     //This line sets the RTC with an explicit date & time, for example to set
-     //January 21, 2014 at 3am you would call:
-     //RTC.adjust(DateTime(2018, 3, 26, 15, 07, 26));
+//     RTC.begin();
+//     RTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
+//     //This line sets the RTC with an explicit date & time, for example to set
+//     //January 21, 2014 at 3am you would call:
+//     //RTC.adjust(DateTime(2018, 3, 26, 15, 07, 26));
   
-  logfile.println("millis, stamp, datetime, temperature, humidity");    
+  logfile.println("millis, stamp, datetime, temperature (C), humidity %, wind speed (mph)");    
 #if ECHO_TO_SERIAL
-  Serial.println("millis, stamp, datetime, temperature, humidity");
+  Serial.println("millis, stamp, datetime, temperature (C), humidity %, wind speed (mph)");
 #endif //ECHO_TO_SERIAL
  
   // If you want to set the aref to something other than 5v
-  analogReference(EXTERNAL);
+  //analogReference(EXTERNAL);
 }
+
 
 void loop(void) {
   DateTime now;
@@ -169,11 +183,30 @@ void loop(void) {
   dht.humidity().getEvent(&event);
   int humReading = event.relative_humidity;   
   logfile.print(humReading);
+  logfile.print(", "); 
 
-#if ECHO_TO_SERIAL  
+#if ECHO_TO_SERIAL //ECHO_TO_SERIAL 
   Serial.print(humReading);
-#endif //ECHO_TO_SERIAL
+  Serial.print(", ");
+#endif 
 
+//ANEMOMETER
+  sensorValue = analogRead(A1);
+  sensorVoltage = sensorValue * (5.0/1023);
+  if (sensorVoltage <= voltageMin){
+    windSpeed = 0; //Check if voltage is below minimum value. If so, set wind speed to zero.
+  }
+  else {
+    windSpeed = (sensorVoltage - voltageMin)*windSpeedMax/(voltageMax - voltageMin); //For voltages above minimum value, use the linear relationship to calculate wind speed.
+  }
+  
+  logfile.print(windSpeed);
+  
+#if ECHO_TO_SERIAL  
+  Serial.print(windSpeed);
+#endif 
+
+//END OF SENSOR SECTION  
   logfile.println();
 #if ECHO_TO_SERIAL
   Serial.println();
