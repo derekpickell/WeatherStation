@@ -7,6 +7,7 @@
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <DHT_U.h>
+#include <Adafruit_BMP280.h>
 
 //DEFINE LOGGER STUFF for Arduino analog pins
 #define LOG_INTERVAL  1000 // mills between entries: (reduce to take more/faster data)
@@ -14,7 +15,7 @@
 // set it to the LOG_INTERVAL to write each time (safest)
 // set it to 10*LOG_INTERVAL to write all data every 10 datareads, you could lose up to 
 // the last 10 reads if power is lost but it uses less power and is much faster!
-#define SYNC_INTERVAL 1000 // mills between calls to flush() - to write data to the card
+#define SYNC_INTERVAL 1000 // milliseconds between calls to flush() - to write data to the card
 uint32_t syncTime = 0; // time of last sync()
 #define ECHO_TO_SERIAL   1 // echo data to serial port
 
@@ -27,12 +28,15 @@ DHT_Unified dht(DHTPIN, DHTTYPE);
 int sensorValue = 0; //Variable stores the value direct from the analog pin
 float sensorVoltage = 0; //Variable that stores the voltage (in Volts) from the anemometer being sent to the analog pin
 float windSpeed = 0; // Wind speed in meters per second (m/s)
-float voltageConversionConstant = .004882814; //This constant maps the value provided from the analog read function, which ranges from 0 to 1023, to actual voltage, which ranges from 0V to 5V
- 
-float voltageMin = .4; // Mininum output voltage from anemometer in mV.
-float windSpeedMin = 0; // Wind speed in meters/sec corresponding to minimum voltage
-float voltageMax = 2.0; // Maximum output voltage from anemometer in mV.
-float windSpeedMax = 32; // Wind speed in meters/sec corresponding to maximum voltage
+
+
+//BAROMETER
+#define BMP_SCK 13
+#define BMP_MISO 12
+#define BMP_MOSI 11 
+#define BMP_CS 10
+
+Adafruit_BMP280 bmp; // I2C
 
 //REAL TIME CLOCK
 RTC_DS1307 RTC; // define the Real Time Clock object
@@ -49,14 +53,6 @@ void error(char *str){
   while(1);
 }
 
-byte hour = 14;
-byte minute = 44;
-byte second = 47;
-byte day = 26;
-byte month = 3;
-byte year = 1;
-
-
 void setup(void){
   Serial.begin(9600);
   Serial.println();
@@ -69,7 +65,7 @@ void setup(void){
   
   // see if the card is present and can be initialized:
   if (!SD.begin(chipSelect)) {
-    error("Card failed, or not present");
+    error((char *) "Card failed, or not present");
   }
   Serial.println("card initialized.");
   
@@ -86,7 +82,12 @@ void setup(void){
   }
   
   if (! logfile) {
-    error("could not create file");
+    error((char *) "could not create file");
+  }
+
+  if (!bmp.begin()){
+    Serial.println(F("Could not find BMP"));
+    while(1);
   }
 
   //Serial of which filename will show up on SD card
@@ -101,43 +102,22 @@ void setup(void){
     Serial.println("RTC failed");
 #endif  
   }
- //following line sets the RTC to the date & time this sketch was compiled
-//     RTC.begin();
-//     RTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
-//     //This line sets the RTC with an explicit date & time, for example to set
-//     //January 21, 2014 at 3am you would call:
-//     //RTC.adjust(DateTime(2018, 3, 26, 15, 07, 26));
-  
-  logfile.println("millis, stamp, datetime, temperature (C), humidity %, wind speed (mph)");    
+  logfile.println("datetime, temperature (C), humidity %, wind speed (mph), pressure & altitude");    
 #if ECHO_TO_SERIAL
-  Serial.println("millis, stamp, datetime, temperature (C), humidity %, wind speed (mph)");
+  Serial.println("datetime, temperature (C), humidity %, wind speed (mph), pressure & altitude");
 #endif //ECHO_TO_SERIAL
- 
-  // If you want to set the aref to something other than 5v
-  //analogReference(EXTERNAL);
 }
-
 
 void loop(void) {
   DateTime now;
   
   // delay for the amount of time we want between readings
   delay((LOG_INTERVAL -1) - (millis() % LOG_INTERVAL));
-  
-  // log milliseconds since starting
   uint32_t m = millis();
-  logfile.print(m);           // milliseconds since start
-  logfile.print(", ");    
-#if ECHO_TO_SERIAL
-  Serial.print(m);         // milliseconds since start
-  Serial.print(", ");  
-#endif
-
+  
   // fetch the time
   now = RTC.now();
   // log time
-  logfile.print(now.unixtime()); // seconds since 1/1/1970
-  logfile.print(", ");
   logfile.print(now.year(), DEC);
   logfile.print("/");
   logfile.print(now.month(), DEC);
@@ -150,15 +130,7 @@ void loop(void) {
   logfile.print(":");
   logfile.print(now.second(), DEC);
   logfile.print(", ");
-#if ECHO_TO_SERIAL
-  Serial.print(now.unixtime()); // seconds since 1/1/1970
-  Serial.print(", ");
-  Serial.print(now.year(), DEC);
-  Serial.print("/");
-  Serial.print(now.month(), DEC);
-  Serial.print("/");
-  Serial.print(now.day(), DEC);
-  Serial.print(" ");
+ #if ECHO_TO_SERIAL 
   Serial.print(now.hour(), DEC);
   Serial.print(":");
   Serial.print(now.minute(), DEC);
@@ -193,24 +165,35 @@ void loop(void) {
 //ANEMOMETER
   sensorValue = analogRead(A1);
   sensorVoltage = sensorValue * (5.0/1023);
-  if (sensorVoltage <= voltageMin){
+  if (sensorVoltage <= .2){
     windSpeed = 0; //Check if voltage is below minimum value. If so, set wind speed to zero.
   }
   else {
-    windSpeed = (sensorVoltage - voltageMin)*windSpeedMax/(voltageMax - voltageMin); //For voltages above minimum value, use the linear relationship to calculate wind speed.
+    windSpeed = (sensorVoltage - 0.42)*32/(2.0 - .42); //For voltages above minimum value, use the linear relationship to calculate wind speed.
   }
   
   logfile.print(windSpeed);
-  
-#if ECHO_TO_SERIAL  
+  logfile.print(", ");
+   
+#if ECHO_TO_SERIAL 
   Serial.print(windSpeed);
-#endif 
+  Serial.print(", ");
+#endif  
+
+//BAROMETER  
+  logfile.print(bmp.readPressure()*.0002953);
+  logfile.print(", ");
+  logfile.print(bmp.readAltitude(1013.25));
+  
+ #if ECHO_TO_SERIAL 
+  Serial.print(bmp.readPressure()*.0002953);
+  Serial.print(", ");
+  Serial.print(bmp.readAltitude(1013.25));
+#endif
 
 //END OF SENSOR SECTION  
   logfile.println();
-#if ECHO_TO_SERIAL
   Serial.println();
-#endif // ECHO_TO_SERIAL
 
   // Now we write data to disk! Don't sync too often - requires 2048 bytes of I/O to SD card
   // which uses a bunch of power and takes time
